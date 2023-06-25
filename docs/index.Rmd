@@ -1,0 +1,388 @@
+---
+title: "Retail Project"
+author: "Trang Thuy Nguyen ID29091985"
+date: "May 14, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(fpp3)
+library(gridExtra)
+set.seed(29091985)
+myseries <- aus_retail %>%
+  filter(
+    `Series ID` == sample(aus_retail$`Series ID`,1),
+    Month < yearmonth("2018 Jan")
+  )
+```
+#Q1
+**A discussion of the statistical features of the original data.**
+
+`myseries` is a data sample retrieved from `aus_retail` data given in `fpp3` package. My `myseries` is a data of *Turnover* of other retailing (e.g: newspaper, books, recreational goods, etc) in Western Australia. The turnover is measured monthly in $million AUD.
+
+```{r}
+myseries %>% autoplot(Turnover) + labs(title = "Figure 1", subtitle = "Turnover of Other retailing in Western Australia") + ylab("Other retailing turnover ($million AUD) ") + xlab("Year")
+```
+
+**Figure 1** is the line graph of the turnover over time. Overall, the turnover has an increasing trend. We can see that there are seasonalities on the graph by frequent pattern of trough an peak: low turnover for a few months and then start increasing significantly. The difference between the peaks and troughs also rise as we move toward present. There is no cyclic behaviour in this data. There are some periods when the amount of turnover did not behave as the normal seasonality such as the sudden rise in turnover in the first quarter of 1996 or a deep drop in 2011 January ~ Feburary.
+
+Now we will look at the seasonality patterns in more details with season and subseries graphs.
+
+```{r}
+season <- gg_season(myseries, Turnover, labels = "both") +  
+  labs(title = "Figure 2",
+subtitle = "The seasonality of turnover of other retailing in Western Australia") + xlab("year") + ylab("Other retailing turnover ($million AUD) ")
+subseries <- gg_subseries(myseries, Turnover) + 
+  labs(title = "Figure 3",
+subtitle = "The subseries of turnover of other retailing in Western Australia")+ xlab("year") + ylab("Other retailing turnover ($million AUD) ")
+season
+subseries
+```
+
+From **Figure 2**, we can observe that the turnover usually starts with pretty low value in *January* and then decreases even lower in *Feburary*. The turnover rises again in *May* then drop by one month later. It is obvious to see that the turnover increase significantly from *November* to *December* with the peak in *December*. The reason for a remarkbly jump in turnover in *December* probably because of higher demand of products due to the Christmas holiday. For other months, the turnover just fluctuates in small amount, it even seems constant from 1982 to 2000.  
+We can confirm that the average of turnover in December is significantly higher than other months by looking at **Figure 3** as well. We can also observe the up and down pattern throughout the year, which can be seen as seasonality. The subseries graph also illustrates the strong increasing trend in the turnover of other retailing, which is in line with **Figure 1** above.
+
+The data is absolutely not a white noise. We can check this by examining the autocorreletion (AFC graph).
+
+```{r}
+myseries %>% ACF(Turnover) %>% autoplot() + 
+  labs(title ="Figure 4",
+subtitle = "The ACF of the turnover of other retailing in Western Australia")
+```
+
+**Figure 4** shows the AFC graph of `myseries` data and it is consistent with the findings from above figures. The lags are significant because they are all larger than 0 and out of 95% boundary. The lags decays slowly because we have a trend in our data. Lag 12 and lag 24 are higher than other lags because this is the seasonal lag (significant rise in *December*).
+
+#Q2
+**Explanation of transformations and differencing used. You should use a unit-root test as part of the discussion.**
+
+Transformation can simplify the patterns in historical data and make the patterns more consistent. The simple patterns usually lead to more accurate forecasting.`myseries` data needs transformation, specifically mathematic transformation because it shows variation that proportional to the level of the series. 
+
+```{r}
+myseries %>%
+features(Turnover, features = guerrero)
+
+#log 
+myseries %>% autoplot(box_cox(Turnover, 0)) +
+ylab("Log transformed turnover") +
+  xlab("Year") +
+  labs(title = "Figure 5",
+subtitle =" Log(Turnover) of Other retailing in Western Australia")
+```
+
+The log transformation is appropriate in this case as we can see the fluctuations are less varied and the graph is more linear. Also, we are able to interpret the change of `Turnover` in percentage more easily using log. I also used the `feature()` function to find the appropriate $\lambda$ for Box Cox transformation and the result is 0.1, which is quite near 0 (log is $\lambda$ = 0 when using box_cox). 
+
+Because our `myseries` data contains trend and seasonality, it is not white noise. From **Figure 4**, it also shows that the ACF is decreasing which indicates that the data is non-stationary. We can also do the unit-root test to check whether the data ta stationary or not.
+
+```{r}
+unit_root_test <- myseries %>% features(Turnover, features = feasts::unitroot_kpss)
+
+myseries %>% features(Turnover, features = feasts::unitroot_ndiffs)
+ 
+myseries %>% features(log(Turnover), features = feasts::unitroot_nsdiffs)
+
+unit_root_test
+```
+
+The p-value is *0.01* which is much smaller than *0.5* so this data is definitely non-stationary. Thus, we can transform it to stationary by computing the difference between consecutive observations. This would help in reducing trend and seasonality since differencing remove changes in the level of time series and thus stabilize the mean. The `unitroot_nsdiffs` function is used to check the number of seasonal differencing and `unitroot_ndiffs` function is for the number of order differencing  in order to have stationary data and it suggests that we indeed need a seasonal differencing and first-order differencing. We can check the ACF and PACF graph again to check whether the data has been stationary or not.
+
+```{r}
+myseries %>% gg_tsdisplay(difference(difference(log(Turnover), 12), 1), plot_type = "partial", lag_max = 36) + 
+  labs(title= "Figure 7",
+subtitle = "ACF and PACF plot of myseries data after seasonal and first-order differencing")
+```
+
+Even though there are still a few significant lags in the ACF and PACF graphs, the level of significance is decreasing as the lag increases. Thus, we can expect there are no more significant lags afterwards. Since we have 1/20 chance of a spike  being significant, we can ignore these signicant lags and proceed with this transformation.
+
+#Q3
+**A description of the methodology used to create a short-list of appropriate ARIMA models and ETS models. Include discussion of AIC values as well as results from applying the models to a test-set consisting of the last 24 months of data provided.**
+
+##ETS
+As the level increases, the size of fluctuation of seasonality rises as well. As a result, multiplicative seasonal is appropriate in this case. Since the seasonality is multiplicative, the error is also likely to be multiplicative too because the effect of error gets larger when the level goes up. The trend is additive because the Turnover is increasing overtime by quite constant amount.So we can have an ETS(M, A, M) model. However, with **ETS(M, A, M)** model, the empirical evidence states that this method tends to over-forecast. Thus, introducing damped trend to it would flatten the trend line sometime in the future. Therefore, we should also consider **ETS(M, Ad, M)** model as well. We can determine which one is better by checking the Akaike’s Information Criterion (AIC) value. The AIC penalises the fit of the model with the number of parameters that need to be estimated. The equation for AIC is:
+$$AIC = -2{log}(L) + 2k$$ 
+where k is the number of parameters and L is the likelihood of the model. Since we want to maximise the likelihood of the model, it is the same as minimising AIC. Thus, we would find the model with the smalles AIC value. 
+
+```{r}
+#split the data into training and test set 
+myseries_tr <- myseries %>%
+  slice(-(n()-23:0))
+myseries_ts <- myseries %>% 
+  slice(n()-23:0)
+
+#fit shortlisted ETS models
+ets_r_auto <- myseries_tr %>% 
+  model(ETS(Turnover))
+ets_shortlisted_fit <- myseries_tr %>% 
+  model(MAM = ETS(Turnover ~ error("M") + trend("A") + season("M")),
+        MAdM = ETS(Turnover ~ error("M") + trend("Ad") + season("M")))
+
+#forecasting 24 months ahead
+ets_shortlisted_fc <- ets_shortlisted_fit %>%
+  forecast(h = "24 months") 
+
+ets_shortlisted_fit %>% glance()
+
+ets_shortlisted_fc %>% accuracy(myseries)
+
+```
+
+The model selected by R is also **ETS(M, Ad, M)**. Now, we can compare our two ETS models. The AICc and RMSE results are consistent with each other, the best fit and model and gives more accuracy is **ETS(M, Ad, M)**
+
+##ARIMA
+For ARIMA model, we can use ACF and PACF graph to determine the appropriate model. From **Figure 7** above, the significant spike at lag 1 suggests non-seasonal MA(1) and the significant spike at lag 12 indicates the seasonal MA(1) component. Same idea applies to PACF, the non-seasonal AR could be 1 or 2 or 3 since spikes at lag ,2 and 3 are significant while we should have AR(1) component for seasonal part. Thus, we can try these following models:
+> 1. ARIMA(1,1,0)(1,1,0)[12]
+> 2. ARIMA(0,1,1)(0,1,1)[12]
+> 3. ARIMA(0,1,2)(0,1,1)[12]
+> 4. ARIMA(2,1,0)(1,1,0)[12]
+> 5. ARIMA(3,1,0)(1,1,0)[12]
+
+```{r}
+arima_models <- myseries_tr %>% 
+  model(
+    auto = ARIMA(log(Turnover)~ pdq(d=1) + PDQ(D = 1), stepwise=FALSE, approximation=FALSE),
+    model_1 = ARIMA(log(Turnover) ~ pdq(1,1,0) + PDQ(1,1,0)),
+    model_2 = ARIMA(log(Turnover) ~ pdq(0,1,1) + PDQ(0,1,1)),
+    model_3 = ARIMA(log(Turnover) ~ pdq(0,1,2) + PDQ(0,1,1)),
+    model_4 = ARIMA(log(Turnover) ~ pdq(2,1,0) + PDQ(1,1,0)),
+    model_5 = ARIMA(log(Turnover) ~ pdq(3,1,0) + PDQ(1,1,0))
+    ) 
+arima_models %>% glance()
+
+arima_shortlisted_fc <- arima_models %>%
+  forecast(h = "24 months")
+
+arima_shortlisted_fc %>% accuracy(myseries) %>% arrange(RMSE)
+
+```
+
+The model generated from R is **ARIMA(3,1,2)(0,1,1)[12]**, I called this *auto* model. If we compare AICc value of all the shortlisted models, the *auto* model has the lowest AICc, followed by *model_2* (**ARIMA(0,1,1)(0,1,1)**) and *model_3*(**ARIMA(0,1,2)(0,1,1)**).
+
+We can examine the RMSE from applying the test-set to forecast 24 months with each model. The result is that *model_5* (**ARIMA(3,1,0)(1,1,0)**) is  the best in predicting the turnover while the second rank is *model_4* (**ARIMA(2,1,0)(1,1,0)**) and following up by *auto* model. 
+
+With this contradiction, we can look at the residuals plot of *model_2* (lowest AICc) and *model_5* (lowest RMSE) to see (we will not choose the model selected by R because we do not want the incorporation of both MA and AR). 
+
+```{r}
+arima_models %>% 
+  select(model_2) %>% 
+  gg_tsresiduals(lag_max = 36) + labs(title = "Residuals plot of model_2 ARIMA(0,1,1)(0,1,1)")
+
+arima_models %>% 
+  select(model_5) %>% 
+  gg_tsresiduals(lag_max = 36) + labs(title="Residuals plot of model_5 ARIMA(3,1,0)(1,1,0)")
+```
+
+Both models contain number of significant lags in ACF plot. This indicates that none of the model have white noise residuals, which then can also mean that the result from AICc may not be reliable because it assumes normality and independece. Thus, we would choose the appropriate model based on RMSE and our final decision is *model_5* ARIMA(3,1,0)(1,1,0).
+
+#Q5
+**Choose one ARIMA model and one ETS model based on this analysis and show parameter estimates, residual diagnostics, forecasts and prediction intervals for both models. Diagnostic checking for both models should include ACF graphs as well as the Ljung-Box test.**
+
+##ETS
+###Parameter estimates
+
+```{r}
+ets_fit <- myseries_tr %>% 
+  model(ETS(Turnover ~ error("M") + trend("Ad") + season("M"))) %>%  
+  report()
+```
+
+The smoothing parameter estimates are $$\hat{\alpha} = 0.5530$$, $$\hat{\beta} = 0.0102$$, $$\hat{\gamma} = 0.0001$$ and $$\hat{\phi} = 0.9766$$. 
+The intial states parameter estimates $$l_0, b_0, s_1, s_2, s_3,... s_{12}$$ as stated in the output. 
+We can then use those parameter to estimate the point forecast by using the equation of **ETS(M, Ad, M)**:
+$$y_t = (l_{t-1} + b_{t-1})s_{t-m}(1+ \epsilon_{t})$$
+$$l_{t} = (l_{t-1} + b_{t-1})(1+ \alpha\epsilon_t)$$
+$$b_t = b_{t-1} + \beta(l_{t-1} + b_{t-1}\epsilon_t)$$
+$$s_t  = s_{t-m}(1+ \gamma\epsilon_t)$$
+
+###Residual diagnostic
+
+```{r}
+ets_fit %>% gg_tsresiduals() + 
+  labs(title= "Figure 8",
+subtitle = "Residuals of ETS(M, Ad, M) model applied to the monthly turnover 
+of other retailings in Western Australia ")
+
+```
+
+In **Figure 8** time plot of residuals shows fluctuate with some outliers but fairly constant variance across the period. However, the histogram graph of residuals does not look like normal distribution. The ACF graph also shows some significant correlations in the residuals series but in decreasing order. We can do a formal test for autocorrelation with *Ljung-Box* test.
+
+```{r}
+ets_fit %>% augment() %>%  features(.resid, ljung_box, dof=17, lag=24)
+```
+
+The p-value is much smaller than 0.05 so we reject the null that residuals are uncorrelated with the predictors. This is consistent with the ACF graph. Our data is not white noise and this correlation of residuals may affect to the forecasting accuracy. 
+
+###Forecasting and prediction intervals
+
+```{r}
+ets_fc <- ets_fit %>% 
+  forecast(h = 24)  
+ets_fc %>% autoplot(myseries %>% filter(Month > yearmonth("2014 Dec"))) +
+labs(title ="Figure 9",
+     subtitle= "Forecasting turnover of other retailing in Western Australia
+using an ETS(M,Ad,M) model") + xlab("Year") +ylab("Other retailing turnover ($million AUD) ")
+```
+
+Generally, the **ETS(M, Ad, M)** did pretty good in forecasting the turnover of other retailing data. It did capture perfectly the peak during *2016 December* and some variations during the first half of *2017*. However, there is under-fitting of turnover for around first three quarters in *2016* although the seasonality is captured. Likewise, the ETS model predicted the turnover more than the actual value about *$50 million AUD* in 2017 December. The 95% confidence interval is really wide, especially during *2017* period. 
+
+##ARIMA
+
+###Parameter estimates
+
+```{r}
+arima_fit <- myseries_tr %>% 
+  model(ARIMA(log(Turnover) ~ pdq(3,1,0) + PDQ(1,1,0))) %>% 
+  report()
+```
+
+The parameter estimates are:
+- AR(1) = -0.3462
+- AR(2) = -0.1739
+- AR(3) = 0.0995
+- SAR(1) = - 0.4408
+
+###Residuals diagnostic
+
+```{r}
+arima_fit %>% gg_tsresiduals() + 
+  labs(title="Figure 10", 
+       subtitle = "Residuals from the ARIMA(3,1,0)(1,1,0)[12] model applied to 
+the monthly turnover of other retailings in Western Australia ")
+```
+
+The time plot shows pretty constant variance throughout the period. The histogram graph also illustrates some kind of normal distribution with mean 0 but not really perfectly normal. There are some significant spikes in the ACF graph which means that the prediction interval may not be accurate. We can double-check with *Ljung-box* test again.
+
+```{r}
+augment(arima_fit) %>%
+  features(.resid, ljung_box, lag = 24, dof = 4)
+```
+
+Same as ETS model, the *Ljung-box test* result shows that there are correlation between residuals and the variables, which is consistent with the conclusion from ACF graph.
+
+###Forecasting and prediction intervals
+
+```{r}
+arima_fc <- arima_fit %>% 
+  forecast(h = 24)  
+arima_fc %>% autoplot(myseries %>% filter(Month > yearmonth("2014 Dec")), level = 95, alpha = 0.5)  +
+labs(title = "Figure 11",
+     subtitle ="Forecasting turnover of other retailing in Western Australia
+using an ARIMA(3,1,0)(1,1,0)[12] model") + xlab("Year") +ylab("Other retailing turnover ($million AUD) ")
+```
+
+Overall, although the **ARIMA(3,1,0)(1,1,0)[12]** model captured the seasonality pattern well for 24 months prediction, there are some periods where it under and over-forecast. The forecasting in *2016* is really close to the actual value during peak period (November to December) but predicted lower turnover for more than half a year of 2016. It did quite well in forecasting the turnover from January till around May 2017, but then over-forecasted afterward, especially in *December*. The prediction interval is pretty wide as well. 
+
+#Q6
+**Comparison of the results from each of your preferred models. Which method do you think gives the better forecasts? Explain with reference to the test-set. Apply your two chosen models to the full data set and produce out-of-sample point forecasts and 80% prediction intervals for each model for two years past the end of the data provided.**
+
+```{r}
+bind_rows(
+  ets_fit %>% accuracy(),
+  arima_fit %>% accuracy(),
+  ets_fc %>% accuracy(myseries),
+  arima_fc %>% accuracy(myseries)
+)
+```
+
+Based on RMSE, we can see that **ETS** model is slightly better than **ARIMA** on the training and also produce more accurate forecast on the test set. 
+
+```{r}
+#out-of-sample forecasts 
+outofsample_fit <- myseries %>% 
+   model(ets = ETS(Turnover ~ error("M") + trend("Ad") + season("M")),
+         arima = ARIMA(log(Turnover) ~ pdq(3,1,0) + PDQ(1,1,0)))
+outofsample_fc <- outofsample_fit %>%
+  forecast(h = "2 years 4 months")
+
+outofsample_fc %>% 
+  autoplot(myseries %>% filter(Month > yearmonth("2014 Dec")), level =80, alpha = 0.8) +
+  guides(colour= guide_legend(title = "Forecast")) +
+  labs(title = "Figure 11",
+       subtitle = "Forecasts from an ARIMA and ETS models fitted to all of the available monthly other retailing data") +xlab("year") + ylab("Other retailing turnover ($million AUD) ")
+
+
+```
+
+The prediction interval of **ARIMA** model is broader than the **ETS** model one. The forecast points from ARIMA also highers than ETS's. 
+
+We can check the 80% confidence interval difference of two models.
+
+```{r}
+`arima_80%_pc` <- outofsample_fc %>%
+  filter(.model == "arima") %>% 
+  transmute(interval=hilo(.distribution, level=80)) %>%
+  select(-.model) %>%
+  print(n=1e3)
+
+`ets_80%_pc` <-outofsample_fc %>%
+  filter(.model == "ets") %>%
+transmute(interval=hilo(.distribution, level=80)) %>%
+select(-.model) %>%
+print(n=1e3)
+```
+
+Taking an example of *December 2019*, the upper bound of **ETS** is $615 million AUD while the upper bound of **ARIMA** is $662.7 million AUD. 
+
+#Q7
+**Obtain up-to-date data from the ABS website (Cat. 8501.0, Table 11), and compare your forecasts with the actual numbers. How well did you do? [Hint: the readabs package can help in getting the data into R.]**
+
+```{r}
+library(readabs)
+
+abs <- read_abs("8501.0", table = 11)
+abs <- abs %>% separate_series()
+
+abs <- abs %>%
+  filter( series_2 == "Western Australia", series_3 == "Other retailing") %>% 
+  select(date, series_2, series_3, value, series_id) %>% 
+  rename(State = series_2, Industry = series_3, Turnover = value, Month = date)
+abs <- abs %>% 
+  mutate(Month = yearmonth(Month))
+abs <- abs %>% 
+  as_tsibble(index = Month)
+```
+
+```{r}
+
+my_abs <- abs %>% 
+  select(Month, Turnover) %>% 
+filter(Month > yearmonth("2017 Dec"))
+
+outofsample_fc %>% 
+  autoplot(myseries %>% filter(Month > yearmonth("2014 Dec")), level= 80) +
+  autolayer(my_abs, colour = "black", .var = Turnover) + 
+  labs(title = "Figure 12",
+       subtitle = "Forecasts from an ARIMA and ETS models fitted to all of the available monthly pther retailing data") +
+  xlab("Year") + ylab("Other retailing turnover ($million AUD) ")+
+  guides(colour= guide_legend(title = "Forecast"))
+  
+outofsample_fc %>% accuracy(abs)
+```
+
+
+Both models did quite well in predicting the turnover in *2018*. **ETS** forecasts closer to the real value during the first few months (perhaps January to April) and under-forecasted a bit from May till October. On the other hand, **ARIMA** over-forecasted by a small amount from Feburary but closer to the real value in June~ July. **ARIMA** also under-forecasted from around October. Both models captured the peak in December really well. 
+
+For *2019*, both model again did a great job in predicting the peak turnover in December, **ARIMA** probably did worse a bit. From January till November, both **ARIMA** and **ETS** forecast the turnover much lower than actual data, though they still present the right ups and downs.
+
+Both models under-forecast the turnover for *2020 January to April*. Specifically, the rise of turnover in March predicted by both models is much lower than the real value. The actual turnover for 2020 March is *$436.5 million AUD* while **ARIMA** predicted *$361 million AUD* and **ETS** predicted *$353 million AUD*. 
+
+In general, the point forecasts of both models are really close to each other, especially a decrease in January, the predictions of **ETS** and **ARIMA** are just different by a few figures. **ARIMA** seems to forecast a bit more accurate than **ETS**. This is also proved by the RMSE values from two models: RMSE of **ARIMA** is 18.5 while **ETS** is 19.3. However, **ETS** seems to capture the peak of turnover in December better than **ARIMA** (since **ARIMA** tends to under-fitting it). 
+
+#Q8
+**A discussion of benefits and limitations of the models for your data**
+
+In general, the advantage of **ETS** model is that it does not need transformation on the data since ETS can handle multiplicative errors and **ETS** can work with non-stationality data. On the other hand, **ARIMA** requires the variance to be constant and thus we need to do some pre-transformation (e.g: first-order differencing, seasonality differencing) in order to fit the model. The model selection process of **ETS** is also easier than **ARIMA** since we can easily identify the components (error, trend, seasonality) to choose aprropriate **ETS** model while we have to evaluate autocorrelation in order to find the best **ARIMA** model.. The ACF/PACF graph sometimes can be hard to determine. When we write down the equations for two models, it seems like it's easier to write ARIMA model than ETS model. In our case, while **ARIMA** has 4 parameters, **ETS** contains 17 paramaters. 
+
+With our choosen models **ETS(M, Ad, M)** and **ARIMA(3,1,0)(1,1,0)[12]** for this data, they did quite well in forecasting the turnover, though tend to under-forecast. The prediction intervals of both models are really wide and thus, might not be accurate. This could be the result of autocorrelation in residuals. 
+
+
+#Reference
+1. Hyndman, R.J., & Athanasopoulos, G. (2019) Forecasting: principles and practice, 3rd edition, OTexts: Melbourne, Australia. OTexts.com/fpp3. Accessed on <current date>.
+
+2. Taylor, J. W. (2003). Exponential smoothing with a damped multiplicative trend. International Journal of Forecasting, 19, 715–725. https://doi.org/10.1016/S0169-2070(03)00003-7
+
+3. Rob Hyndman, George Athanasopoulos, Mitchell O'Hara-Wild. (2020) fpp3: Data for "Forecasting: Principles and Practice" (3rd Edition). R package version 0.3. 
+
+4. Matt Cowgill, Zoe Meers , Jaron Lee , David Diviny , Hugh Parsonage. (2019) readabs: Download and Tidy Time Series Data from the Australian Bureau of Statistics. R package version 0.4.3. 
